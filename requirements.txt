@@ -6,3 +6,4 @@ scikit-learn
 prophet
 streamlit
 plotly
+pandas_ta

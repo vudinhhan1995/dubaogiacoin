@@ -4,10 +4,17 @@ import requests
 import time
 import sqlite3
 import os
+import logging
 from dudoangia import CoinGeckoPredictor
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from datetime import datetime, timedelta
+
+# --- TẮT LOG RÁC CỦA PROPHET ---
+logger = logging.getLogger('cmdstanpy')
+logger.addHandler(logging.NullHandler())
+logger.propagate = False
+logger.setLevel(logging.WARNING)
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(
@@ -52,11 +59,9 @@ def load_portfolio_from_db():
     with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
         try:
             df = pd.read_sql_query("SELECT * FROM portfolio", conn)
-            if df.empty:
-                return pd.DataFrame(columns=["Coin", "Số lượng"])
-            return df
-        except (pd.io.sql.DatabaseError, Exception):
+        except pd.io.sql.DatabaseError:
             return pd.DataFrame(columns=["Coin", "Số lượng"])
+    return df
 
 def save_prediction_to_cache(cache_key, data):
     """Lưu kết quả dự báo vào cache."""
@@ -76,7 +81,7 @@ def load_prediction_from_cache(cache_key, max_age_hours=6):
         row = cursor.fetchone()
         if row:
             cached_at_str = row[2]
-            cached_at = datetime.strptime(cached_at_str, "%Y-%m-%d %H:%M:%S.%f")
+            cached_at = datetime.strptime(cached_at_str, "%Y-%m-%d %H:%M:%S")
             if (datetime.now() - cached_at) < timedelta(hours=max_age_hours):
                 return {'predicted_price': row[0], 'percent_change': row[1]}
     return None
@@ -115,9 +120,9 @@ if 'portfolio' not in st.session_state:
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2272/2272825.png", width=60)
     st.title("Crypto AI Analyst")
-    st.caption("v1.3 - Cache & Multi-thread")
+    st.caption("v2.1 - AI Deep Learning") # Cập nhật version
     st.markdown("---")
-    menu = st.radio("Menu Chính", ["📊 Dashboard Dự báo", "💼 Quản lý Danh mục"], index=1)
+    menu = st.radio("Menu Chính", ["📊 Dashboard Dự báo", "💼 Quản lý Danh mục"], index=0)
     st.markdown("---")
     st.info("💡 Dữ liệu danh mục và cache dự báo được lưu vào file `portfolio.db`.")
 
@@ -147,21 +152,22 @@ if menu == "📊 Dashboard Dự báo":
                 st.metric("Giá hiện tại", f"${current_price:,.4f}")
                 
                 # --- LOGIC DỰ BÁO ---
-                if prediction_days == 1:
-                    # Dùng Linear Regression cho ngắn hạn
-                    next_date, pred_price, model, score, _ = predictor.predict_linear(df)
+                if prediction_days <= 3: # Ngắn hạn dùng Machine Learning (Random Forest)
+                    status.write("🧠 Đang chạy mô hình Random Forest (Short-term)...")
+                    next_date, pred_price, model, score, _ = predictor.predict_machine_learning(df, days_ahead=prediction_days)
                     change = ((pred_price - current_price) / current_price) * 100
                     
-                    st.success(f"Dự báo ngày mai: ${pred_price:,.4f} ({change:+.2f}%)")
+                    st.success(f"Dự báo sau {prediction_days} ngày: ${pred_price:,.4f} ({change:+.2f}%)")
                     st.info(f"Độ tin cậy mô hình (R²): {score:.2f}")
                     
-                    # Vẽ biểu đồ Plotly
-                    fig = predictor.create_plotly_chart(df, [next_date], [pred_price], coin_id=coin_input, mode="Linear")
-                    st.plotly_chart(fig, width='stretch')
+                    # Vẽ biểu đồ Plotly (Fix use_container_width)
+                    fig = predictor.create_plotly_chart(df, [next_date], [pred_price], coin_id=coin_input, mode="ML")
+                    # Cập nhật: Dùng width="stretch" thay vì use_container_width=True
+                    st.plotly_chart(fig, width="stretch") 
 
                 else:
                     # Dùng Prophet cho dài hạn
-                    status.write("🧠 Đang chạy mô hình AI Prophet...")
+                    status.write("🧠 Đang chạy mô hình AI Prophet (Long-term)...")
                     dates, preds, bounds, model, mape = predictor.predict_prophet(df, days_ahead=prediction_days)
                     
                     final_price = preds[-1]
@@ -175,10 +181,11 @@ if menu == "📊 Dashboard Dự báo":
                     elif mape < 10: st.caption("⚠️ Độ chính xác trung bình.")
                     else: st.caption("❌ Thị trường biến động mạnh, tham khảo thận trọng.")
 
-                    # Vẽ biểu đồ Plotly
+                    # Vẽ biểu đồ Plotly (Fix use_container_width)
                     status.write("🎨 Đang vẽ biểu đồ tương tác...")
                     fig = predictor.create_plotly_chart(df, dates, preds, bounds, coin_id=coin_input, mode="Prophet")
-                    st.plotly_chart(fig, width='stretch')
+                    # Cập nhật: Dùng width="stretch" thay vì use_container_width=True
+                    st.plotly_chart(fig, width="stretch")
                 
                 status.update(label="✅ Phân tích hoàn tất!", state="complete")
 
@@ -210,11 +217,6 @@ elif menu == "💼 Quản lý Danh mục":
 
     if not st.session_state.portfolio.empty:
         port_df = st.session_state.portfolio.copy()
-        # Ensure required columns exist
-        if "Coin" not in port_df.columns or "Số lượng" not in port_df.columns:
-            st.session_state.portfolio = pd.DataFrame(columns=["Coin", "Số lượng"])
-            st.rerun()
-        
         coin_ids = list(port_df["Coin"].unique())
         
         with st.spinner("Đang cập nhật giá thị trường..."):
@@ -229,7 +231,9 @@ elif menu == "💼 Quản lý Danh mục":
         st.metric("Net Worth", f"${total_net_worth:,.2f}")
         st.markdown('</div>', unsafe_allow_html=True)
         st.write("")
-        st.dataframe(port_df, use_container_width=True)
+        
+        # SỬA LỖI WARNING: Đã cập nhật width="stretch" từ trước
+        st.dataframe(port_df, width="stretch") 
         st.markdown("---")
 
         st.subheader("🤖 Cố vấn Danh mục AI")
@@ -288,9 +292,15 @@ elif menu == "💼 Quản lý Danh mục":
 
             if final_results:
                 res_df = pd.DataFrame(final_results).sort_values(by="% Thay Đổi", ascending=False)
-                st.dataframe(res_df, use_container_width=True, column_config={"% Thay Đổi": st.column_config.NumberColumn(format="%.2f%%")})
                 
-                # ... (logic hiển thị lời khuyên giữ nguyên)
+                # SỬA LỖI WARNING: Đã cập nhật width="stretch" từ trước
+                st.dataframe(res_df, width="stretch", column_config={"% Thay Đổi": st.column_config.NumberColumn(format="%.2f%%")})
+                
+                # Logic hiển thị lời khuyên
+                best_coin = res_df.iloc[0]
+                worst_coin = res_df.iloc[-1]
+                
+                st.info(f"💡 **AI Insight:** {best_coin['Coin'].upper()} có tiềm năng tăng trưởng tốt nhất ({best_coin['% Thay Đổi']:.2f}%). "
+                        f"Cân nhắc cơ cấu lại {worst_coin['Coin'].upper()}.")
     else:
         st.info("👈 Danh mục trống. Hãy thêm coin mới!")
-

@@ -20,7 +20,6 @@ class CoinGeckoPredictor:
     def __init__(self):
         self.base_api = "https://api.coingecko.com/api/v3"
         self.currency = 'usd'
-        # Cấu hình hiển thị biểu đồ đẹp hơn
         plt.style.use('bmh')
 
     def extract_coin_id(self, url):
@@ -37,7 +36,16 @@ class CoinGeckoPredictor:
             return None
 
     def fetch_history(self, coin_id, days=365, max_retries=3):
-        """Lấy dữ liệu giá OHLC từ API CoinGecko với cơ chế retry."""
+        """
+        Lấy dữ liệu giá OHLC từ API CoinGecko.
+        TỐI ƯU: Tự động giới hạn tối đa 365 ngày để đảm bảo độ chính xác cho xu hướng hiện tại.
+        """
+        # --- TỐI ƯU HÓA: Cắt max 365 ngày ---
+        if days > 365:
+            print(f"⚠️ Tối ưu hóa: Giới hạn dữ liệu lịch sử xuống 365 ngày (thay vì {days}) để dự báo chính xác hơn.")
+            days = 365
+        # ------------------------------------
+
         url = f"{self.base_api}/coins/{coin_id}/market_chart"
         params = {
             'vs_currency': self.currency,
@@ -51,10 +59,10 @@ class CoinGeckoPredictor:
                 response = requests.get(url, params=params, timeout=15)
                 
                 if response.status_code == 429:
-                    wait_time = (attempt + 1) * 10  # Đợi 10s, 20s, 30s...
+                    wait_time = (attempt + 1) * 10
                     print(f"⏳ Rate Limit. Đang đợi {wait_time}s để thử lại...")
                     time.sleep(wait_time)
-                    continue  # Thử lại
+                    continue
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -66,10 +74,15 @@ class CoinGeckoPredictor:
                     df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
                     df['date_ordinal'] = df['date'].apply(lambda x: x.toordinal())
                     df = df.dropna()
+                    
+                    # Đảm bảo chắc chắn chỉ lấy 365 dòng cuối cùng (phòng trường hợp API trả về dư)
+                    if len(df) > 365:
+                        df = df.tail(365).reset_index(drop=True)
+                        
                     return df
                 
                 if response.status_code == 404:
-                    print(f"❌ Không tìm thấy coin ID: '{coin_id}'. Kiểm tra lại link/tên.")
+                    print(f"❌ Không tìm thấy coin ID: '{coin_id}'.")
                     return None
                 
                 print(f"⚠️ Lỗi API không mong muốn: {response.status_code}")
@@ -82,7 +95,7 @@ class CoinGeckoPredictor:
         print("❌ Đã thử lại nhiều lần nhưng thất bại trong việc lấy dữ liệu.")
         return None
 
-    def remove_outliers(self, df, column='price', window=14, sigma=3.0): # Tăng sigma lên 3.0
+    def remove_outliers(self, df, column='price', window=14, sigma=3.0):
         """Lọc nhiễu nhẹ nhàng hơn để giữ lại biến động thị trường quan trọng."""
         df_clean = df.copy()
         rolling_mean = df_clean[column].rolling(window=window).mean()
@@ -92,8 +105,6 @@ class CoinGeckoPredictor:
         lower_bound = rolling_mean - (sigma * rolling_std)
         
         mask = (df_clean[column] >= lower_bound) & (df_clean[column] <= upper_bound)
-        
-        # Fix SettingWithCopyWarning: Giữ lại 14 ngày đầu tiên
         mask.iloc[:window] = True
         
         filtered_df = df_clean[mask]
@@ -104,8 +115,12 @@ class CoinGeckoPredictor:
         return filtered_df
 
     def predict_linear(self, df, days_ahead=1):
-        """Dự đoán Linear Regression với train/test split cho MAPE."""
-        df_clean = self.remove_outliers(df)
+        """Dự đoán Linear Regression. TỐI ƯU: Chỉ dùng dữ liệu 6 tháng gần nhất để bắt trend tốt hơn."""
+        
+        # --- TỐI ƯU HÓA: Cắt lấy 180 ngày cuối cho Linear Regression ---
+        df_opt = df.tail(180).copy() if len(df) > 180 else df.copy()
+        
+        df_clean = self.remove_outliers(df_opt)
         
         X = df_clean[['date_ordinal']]
         y = df_clean['price']
@@ -121,9 +136,9 @@ class CoinGeckoPredictor:
             y_pred_test = model_test.predict(X_test)
             mape = mean_absolute_percentage_error(y_test, y_pred_test) * 100
         else:
-            mape = 0.0 # Không đủ dữ liệu để test
+            mape = 0.0
 
-        # --- Retrain trên toàn bộ dữ liệu để dự đoán tương lai ---
+        # --- Retrain trên toàn bộ dữ liệu (của df_clean) để dự đoán tương lai ---
         model_final = LinearRegression()
         model_final.fit(X, y)
         
@@ -143,12 +158,13 @@ class CoinGeckoPredictor:
         prophet_df.columns = ['ds', 'y']
         prophet_df['y'] = np.log(prophet_df['y'])
         
-        use_yearly = (df['date'].max() - df['date'].min()).days > 300
+        days_diff = (df['date'].max() - df['date'].min()).days
+        use_yearly = days_diff > 300
         
         # --- BƯỚC 1: CROSS VALIDATION (Kiểm tra độ chính xác) ---
         mape = 0.0
         cut_off = len(prophet_df) - 30 
-        if cut_off > 30: # Chỉ test nếu dữ liệu đủ dài (hơn 60 ngày)
+        if cut_off > 30: # Chỉ test nếu dữ liệu đủ dài
             train_df = prophet_df.iloc[:cut_off]
             test_df = prophet_df.iloc[cut_off:]
             
@@ -166,7 +182,6 @@ class CoinGeckoPredictor:
             print("ℹ️ Dữ liệu quá ngắn để thực hiện cross-validation, MAPE sẽ được báo cáo là 0.")
 
         # --- BƯỚC 2: TRAIN FULL ĐỂ DỰ ĐOÁN TƯƠNG LAI ---
-        # Tinh chỉnh hyperparameter dựa trên độ dài dự đoán
         changepoint_scale = 0.05 if days_ahead >= 30 else 0.15
         
         model_final = Prophet(
@@ -183,7 +198,6 @@ class CoinGeckoPredictor:
         
         future_forecast = forecast.tail(days_ahead).copy()
         
-        # Inverse Log & Clipping
         for col in ['yhat', 'yhat_lower', 'yhat_upper']:
             future_forecast[col] = np.exp(future_forecast[col])
             future_forecast[col] = future_forecast[col].clip(lower=0)

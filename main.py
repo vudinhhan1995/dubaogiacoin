@@ -15,12 +15,22 @@ st.set_page_config(
 # --- CSS TÙY CHỈNH (Làm đẹp giao diện) ---
 st.markdown("""
 <style>
-    .stMetric {
+    /* Bỏ style chung cho stMetric để tránh ảnh hưởng chỗ khác */
+    /* .stMetric {
         background-color: #f0f2f6;
         border-radius: 10px;
         padding: 10px;
         border: 1px solid #e0e0e0;
+    } */
+
+    /* Style riêng cho ô Tổng Tài Sản */
+    .total-asset-container .stMetric {
+        background-color: #e6f3ff; /* Màu xanh nhạt */
+        border: 1px solid #b3d9ff; /* Viền xanh đậm hơn */
+        border-radius: 10px;
+        padding: 10px;
     }
+
     .stButton>button {
         width: 100%;
         border-radius: 5px;
@@ -72,7 +82,7 @@ if menu == "📊 Dashboard Dự báo":
     with col1:
         coin_input = st.text_input("🔍 Nhập Coin ID", "bitcoin", help="Ví dụ: bitcoin, dogecoin, solana")
     with col2:
-        prediction_days = st.selectbox("⏳ Khung thời gian", [1, 7, 30, 90], index=1)
+        prediction_days = st.number_input("⏳ Số ngày dự báo", min_value=1, max_value=365, value=7)
     with col3:
         btn_predict = st.button("🚀 Chạy Phân Tích", type="primary")
 
@@ -147,14 +157,13 @@ elif menu == "💼 Quản lý Danh mục":
     st.header("📈 Portfolio & Smart Alerts")
     
     # --- PHẦN 1: THÊM COIN ---
-    with st.expander("➕ Thêm Coin vào Danh mục", expanded=False):
-        c1, c2, c3 = st.columns([2, 1, 1])
+    with st.expander("➕ Thêm Coin vào Danh mục", expanded=True): # Mở sẵn để dễ thấy
+        c1, c2, c3 = st.columns([2, 1, 1], vertical_alignment="bottom")
         with c1:
             new_coin = st.text_input("Coin ID (vd: monad)", key="new_coin")
         with c2:
             new_qty = st.number_input("Số lượng", min_value=0.0, format="%.6f", key="new_qty")
         with c3:
-            st.write("##")
             if st.button("Thêm"):
                 if new_coin and new_qty > 0:
                     # Logic thêm coin
@@ -163,7 +172,8 @@ elif menu == "💼 Quản lý Danh mục":
                     else:
                         new_row = pd.DataFrame([{"Coin": new_coin, "Số lượng": new_qty}])
                         st.session_state.portfolio = pd.concat([st.session_state.portfolio, new_row], ignore_index=True)
-                    st.success(f"Đã thêm {new_coin}")
+                    st.success(f"Đã cập nhật {new_coin}")
+                    time.sleep(1) # Chờ 1s để user đọc success message
                     st.rerun()
 
     # --- PHẦN 2: HIỂN THỊ TỔNG QUAN ---
@@ -195,27 +205,36 @@ elif menu == "💼 Quản lý Danh mục":
             
             # Metric tổng quan
             st.markdown("### 💰 Tổng Tài Sản")
-            st.metric("Net Worth", f"${total_net_worth:,.2f}", delta=None)
             
+            st.markdown('<div class="total-asset-container">', unsafe_allow_html=True)
+            st.metric("Net Worth", f"${total_net_worth:,.2f}", delta=None)
+            st.markdown('</div>', unsafe_allow_html=True)
+
             # Bảng danh mục
             st.dataframe(port_df, use_container_width=True)
             
             st.markdown("---")
             
             # --- PHẦN 3: TÍNH NĂNG DỰ BÁO TÍCH HỢP (THÔNG MINH) ---
-            st.subheader("🤖 AI Phân Tích Danh Mục (Dự báo 7 ngày)")
-            st.info("Chọn một coin trong danh mục để AI chạy phân tích xu hướng.")
+            st.subheader("🤖 AI Phân Tích Danh Mục")
+            st.info("Chọn một coin trong danh mục và số ngày dự báo, sau đó để AI chạy phân tích xu hướng.")
+
+            # Chia cột để chọn coin và số ngày
+            sel_col1, sel_col2 = st.columns([2, 1])
+            with sel_col1:
+                selected_coin = st.selectbox("Chọn Coin để soi:", port_df["Coin"].unique(), key="portfolio_coin_select")
+            with sel_col2:
+                forecast_days = st.number_input("Số ngày dự báo", min_value=1, max_value=365, value=7, key="portfolio_days")
             
-            selected_coin = st.selectbox("Chọn Coin để soi:", port_df["Coin"].unique())
-            
-            if st.button(f"🔍 Phân tích xu hướng {selected_coin.upper()}"):
-                with st.spinner(f"AI đang tính toán đường đi của {selected_coin}..."):
-                    # 1. Lấy dữ liệu
-                    df_coin = predictor.fetch_history(selected_coin, days=180) # Lấy 6 tháng cho nhanh
+            if st.button(f"🔍 Phân tích xu hướng {selected_coin.upper()} ({forecast_days} ngày)"):
+                with st.spinner(f"AI đang tính toán đường đi của {selected_coin} cho {forecast_days} ngày tới..."):
+                    # 1. Lấy dữ liệu (Lấy nhiều hơn số ngày dự báo để model học tốt hơn)
+                    history_days = max(90, forecast_days + 30)
+                    df_coin = predictor.fetch_history(selected_coin, days=history_days)
                     
                     if df_coin is not None:
-                        # 2. Chạy Prophet 7 ngày
-                        dates, preds, bounds, _, _ = predictor.predict_prophet(df_coin, days_ahead=7)
+                        # 2. Chạy Prophet với số ngày tùy chỉnh
+                        dates, preds, bounds, _, mape = predictor.predict_prophet(df_coin, days_ahead=forecast_days)
                         
                         cur_p = df_coin['price'].iloc[-1]
                         fut_p = preds[-1]
@@ -231,8 +250,9 @@ elif menu == "💼 Quản lý Danh mục":
                             else:
                                 st.error(f"Xu hướng: GIẢM 📉")
                                 
-                            st.metric("Giá dự kiến (7 ngày)", f"${fut_p:,.4f}", f"{percent_change:.2f}%")
-                            st.write(f"Khoảng giá: ${bounds[-1][0]:,.2f} - ${bounds[-1][1]:,.2f}")
+                            st.metric(f"Giá dự kiến ({forecast_days} ngày)", f"${fut_p:,.4f}", f"{percent_change:.2f}%")
+                            st.metric("Sai số dự báo (MAPE)", f"{mape:.2f}%", delta_color="inverse")
+                            st.write(f"Khoảng giá dao động: ${bounds[-1][0]:,.2f} - ${bounds[-1][1]:,.2f}")
 
                         with col_b:
                             # Vẽ biểu đồ nhỏ gọn

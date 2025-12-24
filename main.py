@@ -12,32 +12,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS TÙY CHỈNH (Làm đẹp giao diện) ---
+# --- CSS TÙY CHỈNH ---
 st.markdown("""
 <style>
-    /* Bỏ style chung cho stMetric để tránh ảnh hưởng chỗ khác */
-    /* .stMetric {
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 10px;
-        border: 1px solid #e0e0e0;
-    } */
-
-    /* Style riêng cho ô Tổng Tài Sản */
     .total-asset-container .stMetric {
-        background-color: #e6f3ff; /* Màu xanh nhạt */
-        border: 1px solid #b3d9ff; /* Viền xanh đậm hơn */
+        background-color: #e6f3ff;
+        border: 1px solid #b3d9ff;
         border-radius: 10px;
         padding: 10px;
     }
-
     .stButton>button {
         width: 100%;
         border-radius: 5px;
         height: 3em;
-    }
-    h1, h2, h3 {
-        color: #0e1117; 
     }
 </style>
 """, unsafe_allow_html=True)
@@ -49,38 +36,53 @@ def get_predictor():
 
 predictor = get_predictor()
 
+# --- HÀM HỖ TRỢ LẤY GIÁ AN TOÀN (FIX LỖI CRASH) ---
+def get_current_prices_safe(coin_ids, currency='usd'):
+    """Lấy giá hiện tại với cơ chế thử lại để tránh lỗi 429 Rate Limit"""
+    if not coin_ids:
+        return {}
+    
+    api_url = f"https://api.coingecko.com/api/v3/simple/price?ids={','.join(coin_ids)}&vs_currencies={currency}"
+    
+    for i in range(3): # Thử tối đa 3 lần
+        try:
+            response = requests.get(api_url, timeout=10)
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 429:
+                time.sleep(2 * (i + 1)) # Đợi 2s, 4s, 6s...
+                continue
+            else:
+                return {} # Lỗi khác thì trả về rỗng để không crash app
+        except:
+            time.sleep(1)
+            continue
+    return {}
+
 # --- KHỞI TẠO SESSION STATE ---
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = pd.DataFrame(columns=["Coin", "Số lượng"])
 
 # ==============================================================================
-# --- SIDEBAR (THANH ĐIỀU HƯỚNG) ---
+# --- SIDEBAR ---
 # ==============================================================================
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2272/2272825.png", width=80)
     st.title("Crypto AI Analyst")
     st.markdown("---")
-    
-    menu = st.radio(
-        "Menu Chính", 
-        ["📊 Dashboard Dự báo", "💼 Quản lý Danh mục"],
-        index=0
-    )
-    
+    menu = st.radio("Menu Chính", ["📊 Dashboard Dự báo", "💼 Quản lý Danh mục"], index=0)
     st.markdown("---")
-    st.info("💡 **Mẹo:** Nhập đúng Coin ID (ví dụ: `bitcoin`, `ethereum`, `monad`) để có kết quả chính xác nhất.")
+    st.info("💡 **Mẹo:** Nhập đúng Coin ID (ví dụ: `bitcoin`, `ethereum`)")
 
 # ==============================================================================
-# --- TRANG 1: DASHBOARD DỰ BÁO (Dành cho soi chart) ---
+# --- TRANG 1: DASHBOARD DỰ BÁO ---
 # ==============================================================================
 if menu == "📊 Dashboard Dự báo":
     st.header("🔮 Phân Tích & Dự Báo Giá")
     
-    # Chia cột cho Input (dùng vertical_alignment để căn đáy)
     col1, col2, col3 = st.columns([2, 1, 1], vertical_alignment="bottom")
     
     with col1:
-        coin_input = st.text_input("🔍 Nhập Coin ID", "bitcoin", help="Ví dụ: bitcoin, dogecoin, solana")
+        coin_input = st.text_input("🔍 Nhập Coin ID", "bitcoin").strip().lower() # .strip() để xóa khoảng trắng thừa
     with col2:
         prediction_days = st.number_input("⏳ Số ngày dự báo", min_value=1, max_value=365, value=7)
     with col3:
@@ -92,185 +94,183 @@ if menu == "📊 Dashboard Dự báo":
             st.error("❌ Coin ID không hợp lệ!")
         else:
             with st.status(f"🤖 Đang phân tích dữ liệu {coin_id.upper()}...", expanded=True) as status:
-                st.write("1. Kết nối API CoinGecko...")
                 df = predictor.fetch_history(coin_id, days=max(365, prediction_days + 30))
                 
                 if df is None or df.empty:
-                    status.update(label="❌ Lỗi dữ liệu!", state="error")
-                    st.error("Không tải được dữ liệu.")
+                    status.update(label="❌ Lỗi dữ liệu hoặc sai tên Coin!", state="error")
+                    st.error("Không tải được dữ liệu. Kiểm tra lại tên Coin ID.")
                 else:
-                    st.write("2. Làm sạch dữ liệu & Lọc nhiễu...")
                     current_price = df['price'].iloc[-1]
                     
-                    # Xử lý dự báo
                     if prediction_days == 1:
-                        st.write("3. Chạy mô hình Linear Regression...")
+                        st.write("3. Chạy Linear Regression...")
                         date, pred, model, score, mape = predictor.predict_linear(df, 1)
                         fig = predictor.visualize_linear(df, date, pred, model, coin_id)
-                        
-                        # Tính delta
                         delta = ((pred - current_price) / current_price) * 100
                         
                         status.update(label="✅ Hoàn tất!", state="complete", expanded=True)
-                        
-                        # HIỂN THỊ KẾT QUẢ
                         st.divider()
                         m1, m2, m3 = st.columns(3)
                         m1.metric("Giá Hiện Tại", f"${current_price:,.4f}")
                         m2.metric("Dự Báo (1 Ngày)", f"${pred:,.4f}", f"{delta:.2f}%")
-                        m3.metric("Độ Chính Xác (R²)", f"{score:.2f}")
-                        
+                        m3.metric("R² Score", f"{score:.2f}")
                         st.pyplot(fig)
                         
                     else:
-                        st.write("3. Chạy mô hình Prophet AI (Facebook)...")
+                        st.write("3. Chạy Prophet AI...")
                         dates, preds, bounds, _, mape = predictor.predict_prophet(df, prediction_days)
                         fig = predictor.visualize_prophet(df, dates, preds, bounds, coin_id)
-                        
-                        # Tính delta ngày cuối
                         last_pred = preds[-1]
                         delta = ((last_pred - current_price) / current_price) * 100
                         
                         status.update(label="✅ Hoàn tất!", state="complete", expanded=True)
-                        
-                        # HIỂN THỊ KẾT QUẢ
                         st.divider()
                         m1, m2, m3 = st.columns(3)
                         m1.metric("Giá Hiện Tại", f"${current_price:,.4f}")
                         m2.metric(f"Mục Tiêu ({prediction_days} Ngày)", f"${last_pred:,.4f}", f"{delta:.2f}%")
-                        m3.metric("Sai Số (MAPE)", f"{mape:.2f}%", delta_color="inverse") # MAPE càng thấp càng tốt
-                        
+                        m3.metric("MAPE (Sai số)", f"{mape:.2f}%", delta_color="inverse")
                         st.pyplot(fig)
-                        
-                        with st.expander("📄 Xem dữ liệu chi tiết"):
-                            st.dataframe(pd.DataFrame({
-                                "Ngày": dates,
-                                "Dự đoán ($)": preds,
-                                "Thấp nhất ($)": bounds[:, 0],
-                                "Cao nhất ($)": bounds[:, 1]
-                            }))
 
 # ==============================================================================
-# --- TRANG 2: QUẢN LÝ DANH MỤC (Tích hợp Dự báo) ---
+# --- TRANG 2: QUẢN LÝ DANH MỤC ---
 # ==============================================================================
 elif menu == "💼 Quản lý Danh mục":
     st.header("📈 Portfolio & Smart Alerts")
     
     # --- PHẦN 1: THÊM COIN ---
-    with st.expander("➕ Thêm Coin vào Danh mục", expanded=True): # Mở sẵn để dễ thấy
+    with st.expander("➕ Thêm Coin vào Danh mục", expanded=True):
         c1, c2, c3 = st.columns([2, 1, 1], vertical_alignment="bottom")
         with c1:
-            new_coin = st.text_input("Coin ID (vd: monad)", key="new_coin")
+            new_coin = st.text_input("Coin ID (vd: monad)", key="new_coin").strip().lower()
         with c2:
             new_qty = st.number_input("Số lượng", min_value=0.0, format="%.6f", key="new_qty")
         with c3:
             if st.button("Thêm"):
                 if new_coin and new_qty > 0:
-                    # Logic thêm coin
                     if new_coin in st.session_state.portfolio["Coin"].values:
                         st.session_state.portfolio.loc[st.session_state.portfolio["Coin"] == new_coin, "Số lượng"] += new_qty
                     else:
                         new_row = pd.DataFrame([{"Coin": new_coin, "Số lượng": new_qty}])
                         st.session_state.portfolio = pd.concat([st.session_state.portfolio, new_row], ignore_index=True)
                     st.success(f"Đã cập nhật {new_coin}")
-                    time.sleep(1) # Chờ 1s để user đọc success message
+                    time.sleep(0.5)
                     st.rerun()
 
     # --- PHẦN 2: HIỂN THỊ TỔNG QUAN ---
     if not st.session_state.portfolio.empty:
-        # Lấy giá hiện tại cho toàn bộ danh mục
         currency = predictor.currency
         coin_ids = st.session_state.portfolio["Coin"].unique()
         
-        try:
-            with st.spinner("Đang cập nhật giá thị trường..."):
-                api_url = f"https://api.coingecko.com/api/v3/simple/price?ids={','.join(coin_ids)}&vs_currencies={currency}"
-                response = requests.get(api_url, timeout=10).json()
+        # --- FIX: Gọi hàm an toàn thay vì gọi trực tiếp ---
+        with st.spinner("Đang cập nhật giá thị trường..."):
+            price_data = get_current_prices_safe(list(coin_ids), currency)
 
-            # Tính toán bảng
-            port_df = st.session_state.portfolio.copy()
-            current_prices = []
-            total_values = []
+        port_df = st.session_state.portfolio.copy()
+        current_prices = []
+        total_values = []
+        
+        for _, row in port_df.iterrows():
+            cid = row["Coin"]
+            # Lấy giá an toàn, nếu lỗi trả về 0
+            price = price_data.get(cid, {}).get(currency, 0)
+            current_prices.append(price)
+            total_values.append(price * row["Số lượng"])
             
-            for _, row in port_df.iterrows():
-                cid = row["Coin"]
-                price = response.get(cid, {}).get(currency, 0)
-                current_prices.append(price)
-                total_values.append(price * row["Số lượng"])
-                
-            port_df["Giá Hiện Tại"] = current_prices
-            port_df["Tổng Giá Trị"] = total_values
-            
-            total_net_worth = sum(total_values)
-            
-            # Metric tổng quan
-            st.markdown("### 💰 Tổng Tài Sản")
-            
-            st.markdown('<div class="total-asset-container">', unsafe_allow_html=True)
-            st.metric("Net Worth", f"${total_net_worth:,.2f}", delta=None)
-            st.markdown('</div>', unsafe_allow_html=True)
+        port_df["Giá Hiện Tại"] = current_prices
+        port_df["Tổng Giá Trị"] = total_values
+        
+        total_net_worth = sum(total_values)
+        
+        st.markdown("### 💰 Tổng Tài Sản")
+        st.markdown('<div class="total-asset-container">', unsafe_allow_html=True)
+        st.metric("Net Worth", f"${total_net_worth:,.2f}")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-            # Bảng danh mục
-            st.dataframe(port_df, use_container_width=True)
-            
-            st.markdown("---")
-            
-            # --- PHẦN 3: TÍNH NĂNG DỰ BÁO TÍCH HỢP (THÔNG MINH) ---
-            st.subheader("🤖 AI Phân Tích Danh Mục")
-            st.info("Chọn một coin trong danh mục và số ngày dự báo, sau đó để AI chạy phân tích xu hướng.")
+        # Fix cảnh báo use_container_width
+        st.dataframe(port_df, use_container_width=True)
+        
+        st.markdown("---")
 
-            # Chia cột để chọn coin và số ngày
-            sel_col1, sel_col2 = st.columns([2, 1])
-            with sel_col1:
-                selected_coin = st.selectbox("Chọn Coin để soi:", port_df["Coin"].unique(), key="portfolio_coin_select")
-            with sel_col2:
-                forecast_days = st.number_input("Số ngày dự báo", min_value=1, max_value=365, value=7, key="portfolio_days")
+        # --- PHẦN 3: CỐ VẤN DANH MỤC AI ---
+        with st.container():
+            st.subheader("🤖 Cố vấn Danh mục AI")
+            st.info("AI sẽ phân tích toàn bộ danh mục để tìm ra coin tiềm năng.")
             
-            if st.button(f"🔍 Phân tích xu hướng {selected_coin.upper()} ({forecast_days} ngày)"):
-                with st.spinner(f"AI đang tính toán đường đi của {selected_coin} cho {forecast_days} ngày tới..."):
-                    # 1. Lấy dữ liệu (Lấy nhiều hơn số ngày dự báo để model học tốt hơn)
-                    history_days = max(90, forecast_days + 30)
-                    df_coin = predictor.fetch_history(selected_coin, days=history_days)
+            advisor_cols = st.columns([1, 1, 2])
+            with advisor_cols[0]:
+                advisor_days = st.number_input("Số ngày dự báo", min_value=1, max_value=90, value=7)
+            with advisor_cols[1]:
+                st.write("")
+                if st.button("🔍 Đưa ra lời khuyên"):
+                    results = []
+                    total_predicted_value = 0
+                    progress_bar = st.progress(0, text="Bắt đầu phân tích...")
+
+                    for i, row in port_df.iterrows():
+                        coin_id = row["Coin"]
+                        quantity = row["Số lượng"]
+                        
+                        progress_bar.progress((i+1)/len(port_df), text=f"Đang phân tích {coin_id.upper()}...")
+                        
+                        # Fetch history cũng có cơ chế retry nên an toàn
+                        df_coin = predictor.fetch_history(coin_id, days=365)
+                        if df_coin is not None:
+                            dates, preds, _, _, _ = predictor.predict_prophet(df_coin, days_ahead=advisor_days)
+                            predicted_price = preds[-1]
+                            predicted_value = quantity * predicted_price
+                            percent_change = ((predicted_price - row["Giá Hiện Tại"]) / row["Giá Hiện Tại"]) * 100 if row["Giá Hiện Tại"] > 0 else 0
+                            
+                            results.append({
+                                "Coin": coin_id,
+                                "Giá Hiện Tại": row["Giá Hiện Tại"],
+                                f"Giá Dự Báo ({advisor_days} ngày)": predicted_price,
+                                "Thay Đổi (%)": percent_change
+                            })
+                            total_predicted_value += predicted_value
+                        
+                        # Quan trọng: Nghỉ 1 chút để không bị block IP
+                        time.sleep(1.0) 
                     
+                    progress_bar.empty()
+
+                    if results:
+                        st.markdown("#### Bảng phân tích chi tiết")
+                        result_df = pd.DataFrame(results).sort_values(by="Thay Đổi (%)", ascending=False)
+                        st.dataframe(result_df, use_container_width=True, 
+                                   column_config={"Thay Đổi (%)": st.column_config.NumberColumn(format="%.2f%%")})
+
+                        top_gainer = result_df.iloc[0]
+                        overall_change = ((total_predicted_value - total_net_worth) / total_net_worth) * 100 if total_net_worth > 0 else 0
+
+                        st.success(f"**Coin tiềm năng nhất:** `{top_gainer['Coin'].upper()}` (+{top_gainer['Thay Đổi (%)']:.2f}%).")
+                        if overall_change > 0:
+                            st.info(f"Tổng danh mục dự kiến **TĂNG {overall_change:.2f}%**.")
+                        else:
+                            st.warning(f"Tổng danh mục dự kiến **GIẢM {overall_change:.2f}%**.")
+        
+        # --- PHẦN 4: SOI CHART RIÊNG ---
+        st.markdown("---")
+        st.subheader("🔬 Soi chart chi tiết")
+        c_sel1, c_sel2, c_sel3 = st.columns([2, 1, 1], vertical_alignment="bottom")
+        with c_sel1:
+            selected_coin = st.selectbox("Chọn Coin:", port_df["Coin"].unique())
+        with c_sel2:
+            forecast_days = st.number_input("Ngày dự báo", 1, 365, 7)
+        with c_sel3:
+            if st.button("🔍 Phân tích"):
+                with st.spinner(f"Đang soi {selected_coin}..."):
+                    df_coin = predictor.fetch_history(selected_coin, days=max(90, forecast_days + 30))
                     if df_coin is not None:
-                        # 2. Chạy Prophet với số ngày tùy chỉnh
                         dates, preds, bounds, _, mape = predictor.predict_prophet(df_coin, days_ahead=forecast_days)
-                        
-                        cur_p = df_coin['price'].iloc[-1]
-                        fut_p = preds[-1]
-                        percent_change = ((fut_p - cur_p) / cur_p) * 100
-                        
-                        # 3. Hiển thị Card thông tin
-                        col_a, col_b = st.columns([1, 2])
-                        
-                        with col_a:
-                            st.markdown(f"### {selected_coin.upper()}")
-                            if percent_change > 0:
-                                st.success(f"Xu hướng: TĂNG 📈")
-                            else:
-                                st.error(f"Xu hướng: GIẢM 📉")
-                                
-                            st.metric(f"Giá dự kiến ({forecast_days} ngày)", f"${fut_p:,.4f}", f"{percent_change:.2f}%")
-                            st.metric("Sai số dự báo (MAPE)", f"{mape:.2f}%", delta_color="inverse")
-                            st.write(f"Khoảng giá dao động: ${bounds[-1][0]:,.2f} - ${bounds[-1][1]:,.2f}")
-
-                        with col_b:
-                            # Vẽ biểu đồ nhỏ gọn
-                            fig_mini = predictor.visualize_prophet(df_coin, dates, preds, bounds, selected_coin)
-                            st.pyplot(fig_mini)
+                        st.pyplot(predictor.visualize_prophet(df_coin, dates, preds, bounds, selected_coin))
                     else:
-                        st.error("Không đủ dữ liệu để phân tích coin này.")
+                        st.error("Lỗi dữ liệu.")
             
-            # Xóa coin (Đặt cuối cho gọn)
-            with st.expander("🗑 Xóa Coin"):
-                del_coin = st.selectbox("Chọn để xóa", port_df["Coin"].unique())
-                if st.button("Xác nhận xóa"):
-                    st.session_state.portfolio = st.session_state.portfolio[st.session_state.portfolio["Coin"] != del_coin]
-                    st.rerun()
-
-        except Exception as e:
-            st.error(f"Lỗi kết nối API: {e}")
-            st.dataframe(st.session_state.portfolio)
+        with st.expander("🗑 Xóa Coin khỏi danh mục"):
+            del_coin = st.selectbox("Chọn để xóa", port_df["Coin"].unique())
+            if st.button("Xác nhận xóa"):
+                st.session_state.portfolio = st.session_state.portfolio[st.session_state.portfolio["Coin"] != del_coin]
+                st.rerun()
             
     else:
-        st.info("👈 Danh mục trống. Hãy thêm coin mới ở phần trên!")
+        st.info("👈 Danh mục trống. Hãy thêm coin mới!")

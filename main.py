@@ -101,7 +101,7 @@ if menu == "📊 Dashboard Dự báo":
                         # Tính delta
                         delta = ((pred - current_price) / current_price) * 100
                         
-                        status.update(label="✅ Hoàn tất!", state="complete", expanded=False)
+                        status.update(label="✅ Hoàn tất!", state="complete", expanded=True)
                         
                         # HIỂN THỊ KẾT QUẢ
                         st.divider()
@@ -121,7 +121,7 @@ if menu == "📊 Dashboard Dự báo":
                         last_pred = preds[-1]
                         delta = ((last_pred - current_price) / current_price) * 100
                         
-                        status.update(label="✅ Hoàn tất!", state="complete", expanded=False)
+                        status.update(label="✅ Hoàn tất!", state="complete", expanded=True)
                         
                         # HIỂN THỊ KẾT QUẢ
                         st.divider()

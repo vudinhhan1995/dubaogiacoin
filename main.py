@@ -2,7 +2,61 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
+import sqlite3
+import os
 from dudoangia import CoinGeckoPredictor
+
+# --- SQLITE DATABASE PATH ---
+DB_PATH = "portfolio.db"
+
+# --- HÀM SQLITE ---
+def init_db():
+    """Khởi tạo database và bảng portfolio"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS portfolio (
+            coin_id TEXT PRIMARY KEY,
+            quantity REAL NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def save_portfolio_to_db(portfolio_df):
+    """Lưu danh mục vào SQLite"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Xóa dữ liệu cũ
+    c.execute("DELETE FROM portfolio")
+    
+    # Thêm dữ liệu mới
+    for _, row in portfolio_df.iterrows():
+        c.execute("""
+            INSERT OR REPLACE INTO portfolio (coin_id, quantity, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+        """, (row["Coin"], row["Số lượng"]))
+    
+    conn.commit()
+    conn.close()
+
+def load_portfolio_from_db():
+    """Tải danh mục từ SQLite"""
+    if not os.path.exists(DB_PATH):
+        return pd.DataFrame(columns=["Coin", "Số lượng"])
+    
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT coin_id as Coin, quantity as 'Số lượng' FROM portfolio", conn)
+    conn.close()
+    
+    if df.empty:
+        return pd.DataFrame(columns=["Coin", "Số lượng"])
+    return df
+
+# Khởi tạo database
+init_db()
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(
@@ -59,9 +113,9 @@ def get_current_prices_safe(coin_ids, currency='usd'):
             continue
     return {}
 
-# --- KHỞI TẠO SESSION STATE ---
+# --- KHỞI TẠO SESSION STATE VÀ LOAD TỪ SQLITE ---
 if 'portfolio' not in st.session_state:
-    st.session_state.portfolio = pd.DataFrame(columns=["Coin", "Số lượng"])
+    st.session_state.portfolio = load_portfolio_from_db()
 
 # ==============================================================================
 # --- SIDEBAR ---
@@ -152,6 +206,8 @@ elif menu == "💼 Quản lý Danh mục":
                     else:
                         new_row = pd.DataFrame([{"Coin": new_coin, "Số lượng": new_qty}])
                         st.session_state.portfolio = pd.concat([st.session_state.portfolio, new_row], ignore_index=True)
+                    # Lưu vào SQLite
+                    save_portfolio_to_db(st.session_state.portfolio)
                     st.success(f"Đã cập nhật {new_coin}")
                     time.sleep(0.5)
                     st.rerun()
@@ -270,6 +326,8 @@ elif menu == "💼 Quản lý Danh mục":
             del_coin = st.selectbox("Chọn để xóa", port_df["Coin"].unique())
             if st.button("Xác nhận xóa"):
                 st.session_state.portfolio = st.session_state.portfolio[st.session_state.portfolio["Coin"] != del_coin]
+                # Lưu vào SQLite
+                save_portfolio_to_db(st.session_state.portfolio)
                 st.rerun()
             
     else:

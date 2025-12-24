@@ -240,7 +240,7 @@ elif menu == "💼 Quản lý Danh mục":
         # Thay use_container_width=True bằng width="stretch" (cho bản mới) 
         # Hoặc xóa bỏ nếu bản cũ, ở đây dùng 'stretch' cho bản Streamlit mới nhất
         try:
-            st.dataframe(port_df, width=None, use_container_width=True) 
+            st.dataframe(port_df, width=None)
         except:
             # Fallback nếu version quá cũ
             st.dataframe(port_df)
@@ -289,7 +289,7 @@ elif menu == "💼 Quản lý Danh mục":
                 # Hiển thị bảng kết quả (Fix cảnh báo đỏ)
                 st.dataframe(
                     res_df, 
-                    use_container_width=True,
+                    width='stretch',
                     column_config={"% Thay Đổi": st.column_config.NumberColumn(format="%.2f%%")}
                 )
 

@@ -52,9 +52,11 @@ def load_portfolio_from_db():
     with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
         try:
             df = pd.read_sql_query("SELECT * FROM portfolio", conn)
-        except pd.io.sql.DatabaseError:
+            if df.empty:
+                return pd.DataFrame(columns=["Coin", "Số lượng"])
+            return df
+        except (pd.io.sql.DatabaseError, Exception):
             return pd.DataFrame(columns=["Coin", "Số lượng"])
-    return df
 
 def save_prediction_to_cache(cache_key, data):
     """Lưu kết quả dự báo vào cache."""
@@ -208,6 +210,11 @@ elif menu == "💼 Quản lý Danh mục":
 
     if not st.session_state.portfolio.empty:
         port_df = st.session_state.portfolio.copy()
+        # Ensure required columns exist
+        if "Coin" not in port_df.columns or "Số lượng" not in port_df.columns:
+            st.session_state.portfolio = pd.DataFrame(columns=["Coin", "Số lượng"])
+            st.rerun()
+        
         coin_ids = list(port_df["Coin"].unique())
         
         with st.spinner("Đang cập nhật giá thị trường..."):

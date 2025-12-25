@@ -1,8 +1,2 @@
-requests
-pandas
-numpy
-matplotlib
-scikit-learn
-prophet
-streamlit
-plotly
+Flask==3.0.0
+requests==2.31.0

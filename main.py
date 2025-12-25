@@ -8,9 +8,12 @@ import math
 import pandas as pd
 import numpy as np
 import os
+import logging
 
-# Tắt thông báo log của TensorFlow để gọn terminal
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# --- TENSORFLOW CONFIGURATION ---
+# Tắt log TensorFlow và AutoGraph warning
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 0=All, 1=Filter, 2=Error, 3=Fatal
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
 
 from flask import Flask, render_template_string, request, redirect, url_for, flash
 
@@ -19,6 +22,10 @@ from statsmodels.tsa.arima.model import ARIMA
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense, LSTM
+import tensorflow as tf
+
+# Tắt AutoGraph warning cụ thể
+tf.autograph.set_verbosity(0)
 
 app = Flask(__name__)
 app.secret_key = 'crypto_super_secret_key'
@@ -257,7 +264,10 @@ def calculate_forecast_lstm(symbol, history_prices, days_to_predict=7):
                 lst_output.append(yhat[0][0])
 
         predicted_prices = scaler.inverse_transform(np.array(lst_output).reshape(-1, 1))
-        predicted_prices = [round(float(x), 4) for x in predicted_prices]
+        
+        # --- FIX: NumPy Deprecation Warning ---
+        # Sử dụng .item() thay vì float(x) để chuyển đổi scalar array
+        predicted_prices = [round(x.item(), 4) for x in predicted_prices.flatten()]
 
         labels = []
         curr = datetime.datetime.now()

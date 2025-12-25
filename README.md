@@ -1,38 +1,49 @@
-# Investment Portfolio & Crypto Prediction Web App
+# Crypto Portfolio Manager
 
-This is a Streamlit web application that allows you to manage your cryptocurrency portfolio and predict future prices of various coins.
+Ứng dụng quản lý danh mục tiền điện tử với tính năng dự báo giá.
 
-## How to Run the Application
+## Tính năng
 
-1.  **Ensure all dependencies are installed:**
-    You have a `requirements.txt` file that lists all necessary libraries. Make sure they are installed in your Python environment. You can install them using pip:
-    ```bash
-    pip install -r requirements.txt
-    ```
+- **Quản lý danh mục**: Thêm, xóa, theo dõi các coin đã mua
+- **Giá real-time**: Lấy giá từ CoinGecko API
+- **Dự báo giá**: Sử dụng Linear Regression để dự đoán xu hướng giá
+- **Phân tích PnL**: Tính toán lãi/lỗ theo thời gian thực
+- **Cache giá**: Lưu giá vào database khi API thất bại
+- **Toast notifications**: Thông báo khi có lỗi API hoặc không tìm thấy dữ liệu
 
-2.  **Run the Streamlit application:**
-    Open your terminal, navigate to the directory containing `main.py`, and run the following command:
-    ```bash
-    streamlit run main.py
-    ```
+## Cài đặt
 
-    Your web browser should open with the application running.
+```bash
+# Tạo virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# hoặc
+venv\Scripts\activate  # Windows
 
-## Features
+# Cài đặt dependencies
+pip install -r requirements.txt
 
-### Price Prediction
+# Chạy ứng dụng
+python main.py
+```
 
--   Enter the ID of a cryptocurrency (e.g., `bitcoin`, `ethereum`).
--   Select the number of days you want to forecast.
-    -   A 1-day forecast uses a simple Linear Regression model.
-    -   Forecasts for 7 days or more use the more advanced Prophet AI model.
--   View the predicted price, model accuracy metrics, and a chart visualizing the forecast.
+## Sử dụng
 
-### Portfolio Management
+1. Mở trình duyệt: http://127.0.0.1:5005
+2. Thêm coin vào danh mục (symbol, số lượng, giá mua)
+3. Xem tổng tài sản và PnL
+4. Click biểu tượng chart để xem dự báo giá
 
--   Add coins and their quantities to your investment portfolio.
--   The application will fetch the current market prices from the CoinGecko API.
--   View the total value of your portfolio and a detailed breakdown of your holdings.
--   Remove coins from your portfolio.
+## API
 
-**Note:** The portfolio data is stored in the session and will be reset if you close the browser tab or restart the application.
+- **CoinGecko API**: Lấy giá và dữ liệu lịch sử
+- **Linear Regression**: Dự báo xu hướng giá
+
+## Cấu trúc database
+
+- `portfolio`: Lưu thông tin coin đã mua
+- `price_cache`: Lưu cache giá từ API
+
+## License
+
+MIT

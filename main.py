@@ -280,10 +280,82 @@ def calculate_forecast_lstm(symbol, history_prices, days_to_predict=7):
         print(f"LSTM Error: {e}")
         return [], [], [], [], "Error"
 
-def get_market_sentiment(pnl):
-    if pnl < -15: return "Thị trường Oversold (Quá bán). Vùng mua tiềm năng.", "danger"
-    if pnl > 25: return "Thị trường Overbought (Quá mua). Cân nhắc chốt lời.", "success"
-    return "Thị trường Sideway (Đi ngang). Tiếp tục quan sát.", "info"
+def get_market_sentiment(pnl, history_prices, predicted_prices=None):
+    """
+    Phân tích tâm lý thị trường thông minh dựa trên:
+    1. RSI (Chỉ báo kỹ thuật)
+    2. Xu hướng Dự báo của AI
+    3. PnL hiện tại
+    """
+    # 1. Tính RSI (Relative Strength Index - 14 ngày)
+    try:
+        series = pd.Series(history_prices)
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        current_rsi = rsi.iloc[-1]
+    except:
+        current_rsi = 50.0 # Mặc định nếu không đủ dữ liệu
+
+    # 2. Phân tích Xu hướng Dự báo (Forecast Trend)
+    trend_msg = "Sideway"
+    trend_score = 0 # 1: Bullish, -1: Bearish, 0: Neutral
+    
+    if predicted_prices and len(predicted_prices) > 0:
+        current_price = history_prices[-1]
+        future_price = predicted_prices[-1]
+        change_pct = ((future_price - current_price) / current_price) * 100
+        
+        if change_pct > 1.5:
+            trend_msg = f"TĂNG (+{change_pct:.1f}%)"
+            trend_score = 1
+        elif change_pct < -1.5:
+            trend_msg = f"GIẢM ({change_pct:.1f}%)"
+            trend_score = -1
+        else:
+            trend_msg = f"ĐI NGANG ({change_pct:.1f}%)"
+
+    # 3. Tổng hợp Lời khuyên (Actionable Advice)
+    advice = []
+    color = "info" # Màu mặc định
+
+    # Nhận định về RSI
+    if current_rsi > 70:
+        advice.append(f"RSI cao ({current_rsi:.0f} - Quá mua).")
+        if trend_score == 1:
+            advice.append("Đà tăng mạnh nhưng rủi ro điều chỉnh cao.")
+            color = "warning"
+        elif trend_score == -1:
+            advice.append("Cảnh báo ĐẢO CHIỀU GIẢM! Nên chốt lời.")
+            color = "danger"
+    elif current_rsi < 30:
+        advice.append(f"RSI thấp ({current_rsi:.0f} - Quá bán).")
+        if trend_score == 1:
+            advice.append("Tín hiệu ĐẢO CHIỀU TĂNG (Bắt đáy). Cơ hội MUA tốt.")
+            color = "success"
+        else:
+            advice.append("Giá đang rơi mạnh. Chờ tín hiệu tạo đáy.")
+            color = "warning"
+    else:
+        advice.append(f"RSI trung tính ({current_rsi:.0f}).")
+        if trend_score == 1:
+            advice.append(f"AI dự báo {trend_msg}. Xu hướng tích cực để tích lũy.")
+            color = "primary"
+        elif trend_score == -1:
+            advice.append(f"AI dự báo {trend_msg}. Hạn chế mua mới.")
+            color = "secondary"
+        else:
+            advice.append("Thị trường chưa rõ xu hướng.")
+
+    # Nhận định về PnL (Chiến lược cá nhân)
+    if pnl < -15 and trend_score == 1:
+        advice.append("Vị thế đang lỗ nhưng AI dự báo hồi phục -> Cân nhắc DCA hạ giá vốn.")
+    elif pnl > 20 and trend_score == -1:
+        advice.append("Đang có lãi tốt & dự báo giảm -> Nên hiện thực hóa lợi nhuận.")
+
+    return " ".join(advice), color
 
 # ------------------------------------------------------------------
 # 4. TEMPLATE HTML
@@ -727,7 +799,7 @@ def predict(symbol):
     else:
         pred_lbl, pred_mean, low, up, model_status = calculate_forecast_arima(hist_data, days)
         
-    advice_txt, advice_col = get_market_sentiment(target_pnl)
+    advice_txt, advice_col = get_market_sentiment(target_pnl, hist_data, pred_mean)
 
     return render_template_string(
         HTML_TEMPLATE,
